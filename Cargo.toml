@@ -1,0 +1,11 @@
+[package]
+name = "exe-look"
+version = "0.1.0"
+authors = ["Lucius-Q-User <12174eb6@opayq.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pelite = "*"
