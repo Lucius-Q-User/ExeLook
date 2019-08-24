@@ -5,7 +5,6 @@ use std::{
     panic
 };
 
-mod icon_group;
 mod dib;
 mod exelook;
 

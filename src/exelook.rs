@@ -8,18 +8,16 @@ use std::{
 
 use pelite::{
     self,
+    PeFile,
     FileMap,
-    pe64::{PeFile as Pe64File, Pe as Pe64},
-    pe32::{PeFile as Pe32File, Pe as Pe32},
-    resources::{Resources, Name, Directory}
+    resources::{Resources, FindError}
 };
 
 use crate::{
     dib::{
         self,
         BitmapInfoHeader
-    },
-    icon_group::{IconGroupDirectory}
+    }
 };
 
 #[derive(Debug)]
@@ -58,6 +56,12 @@ impl From<NoneError> for Error {
     }
 }
 
+impl From<FindError> for Error {
+    fn from(_err: FindError) -> Self {
+        Error::NoIconFound
+    }
+}
+
 struct PngHeader<'a> {
     bytes: &'a [u8]
 }
@@ -81,18 +85,7 @@ impl<'a> PngHeader<'a> {
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 fn get_resources(bytes: &[u8]) -> Result<Resources> {
-    let res = match Pe32File::from_bytes(bytes) {
-        Ok(pe_file) => {
-            pe_file.resources()
-        },
-        Err(pelite::Error::PeMagic) => {
-            let pe_file = Pe64File::from_bytes(bytes)?;
-            pe_file.resources()
-        },
-        Err(err) => {
-            return Err(err.into());
-        }
-    };
+    let res = PeFile::from_bytes(bytes)?.resources();
     if let Err(pelite::Error::Null) = res {
         Err(Error::NoIconFound)
     } else {
@@ -100,50 +93,10 @@ fn get_resources(bytes: &[u8]) -> Result<Resources> {
     }
 }
 
-fn get_directory<'a>(resources: &Resources<'a>, id: u32) -> Result<Directory<'a>> {
-    for dentry in resources.root()?.entries() {
-        if dentry.name()? == Name::Id(id) {
-            return Ok(dentry.entry()?.dir()?);
-        }
-    }
-    Err(Error::NoIconFound)
-}
-
-
 fn is_png(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 }
 
-fn get_icon_group<'a>(resources: &Resources<'a>) -> Result<IconGroupDirectory<'a>> {
-    let icon_group_langs = get_directory(resources, 14)?.entries()
-        .next()?.entry()?.dir()?;
-    let icon_group = icon_group_langs.entries().next()?
-        .entry()?.data()?.bytes()?;
-    IconGroupDirectory::from_bytes(icon_group)
-        .ok_or_else(|| pelite::Error::Bounds.into())
-}
-
-fn get_icons<'a>(resources: &Resources<'a>, names: Vec<u32>) -> Result<impl Iterator<Item = Result<&'a [u8]>>> {
-    Ok(get_directory(resources, 3)?.entries().map(move |icon| {
-        Ok(if let Name::Id(id) = icon.name()? {
-            if names.contains(&id) {
-                let data = icon.entry()?.dir()?.entries().next()?
-                    .entry()?.data()?;
-                Some(data.bytes()?)
-            } else {
-                None
-            }
-        } else {
-            None
-        })
-    }).filter_map(|x| {
-        match x {
-            Err(w) => Some(Err(w)),
-            Ok(Some(w)) => Some(Ok(w)),
-            Ok(None) => None
-        }
-    }))
-}
 
 fn icon_compare_key(icon: &[u8]) -> Result<impl PartialOrd> {
     Ok(if is_png(icon) {
@@ -176,8 +129,10 @@ fn best_icon<'a>(mut icons: impl Iterator<Item = Result<&'a [u8]>>) -> Result<&'
 pub fn exelook(file_name: &CStr) -> Result<(Vec<u8>, bool, i32, i32)> {
     let map_region = FileMap::open(file_name.to_str()?)?;
     let resources = get_resources(map_region.as_ref())?;
-    let icon_ids = get_icon_group(&resources)?.entries().map(|x| u32::from(x.icon_id())).collect::<Vec<_>>();
-    let best_icon = best_icon(get_icons(&resources, icon_ids)?)?;
+    let (_, icon_group) = resources.group_icons().next().ok_or(Error::NoIconFound)??;
+    let icons = icon_group.entries().iter().map(|ent| icon_group.image(ent.nId).map_err(Into::into));
+
+    let best_icon = best_icon(icons)?;
     if is_png(best_icon) {
         Ok((best_icon.to_owned(), true, 0, 0))
     } else {
