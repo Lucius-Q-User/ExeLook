@@ -1,6 +1,7 @@
 all: ExeLook.qlgenerator
 
 install: all
+	mkdir -p ~/Library/QuickLook
 	cp -r ExeLook.qlgenerator ~/Library/QuickLook
 	qlmanage -r
 
